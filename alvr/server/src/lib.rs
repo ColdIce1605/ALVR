@@ -26,7 +26,7 @@ use alvr_events::EventType;
 use alvr_filesystem::{self as afs, Layout};
 use alvr_server_data::ServerDataManager;
 use alvr_session::{OpenvrPropValue, OpenvrPropertyKey};
-use alvr_sockets::{ClientListAction, GpuVendor, Haptics, TimeSyncPacket, VideoFrameHeaderPacket};
+use alvr_sockets::{ClientListAction, GpuVendor, Haptics, VideoFrameHeaderPacket};
 use std::{
     ffi::{c_void, CStr, CString},
     os::raw::c_char,
@@ -54,8 +54,6 @@ static WINDOW: Lazy<Mutex<Option<Arc<alcro::UI>>>> = Lazy::new(|| Mutex::new(Non
 static VIDEO_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<(VideoFrameHeaderPacket, Vec<u8>)>>>> =
     Lazy::new(|| Mutex::new(None));
 static HAPTICS_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<Haptics>>>> =
-    Lazy::new(|| Mutex::new(None));
-static TIME_SYNC_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<TimeSyncPacket>>>> =
     Lazy::new(|| Mutex::new(None));
 
 static CLIENTS_UPDATED_NOTIFIER: Lazy<Notify> = Lazy::new(Notify::new);
@@ -307,30 +305,6 @@ pub unsafe extern "C" fn HmdDriverFactory(
         }
     }
 
-    extern "C" fn time_sync_send(data: TimeSync) {
-        if let Some(sender) = &*TIME_SYNC_SENDER.lock() {
-            let time_sync = TimeSyncPacket {
-                mode: data.mode,
-                server_time: data.serverTime,
-                client_time: data.clientTime,
-                packets_lost_total: data.packetsLostTotal,
-                packets_lost_in_second: data.packetsLostInSecond,
-                average_send_latency: data.averageSendLatency,
-                average_transport_latency: data.averageTransportLatency,
-                average_decode_latency: data.averageDecodeLatency,
-                idle_time: data.idleTime,
-                fec_failure: data.fecFailure,
-                fec_failure_in_second: data.fecFailureInSecond,
-                fec_failure_total: data.fecFailureTotal,
-                fps: data.fps,
-                server_total_latency: data.serverTotalLatency,
-                tracking_recv_frame_index: data.trackingRecvFrameIndex,
-            };
-
-            sender.send(time_sync).ok();
-        }
-    }
-
     pub extern "C" fn driver_ready_idle(set_default_chap: bool) {
         alvr_common::show_err(alvr_commands::apply_driver_paths_backup(
             FILESYSTEM_LAYOUT.openvr_driver_root_dir.clone(),
@@ -366,7 +340,6 @@ pub unsafe extern "C" fn HmdDriverFactory(
     DriverReadyIdle = Some(driver_ready_idle);
     VideoSend = Some(video_send);
     HapticsSend = Some(haptics_send);
-    TimeSyncSend = Some(time_sync_send);
     ShutdownRuntime = Some(_shutdown_runtime);
     PathStringToHash = Some(path_string_to_hash);
 

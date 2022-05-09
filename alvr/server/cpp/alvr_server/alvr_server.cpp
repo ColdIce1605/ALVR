@@ -167,7 +167,6 @@ void (*LogDebug)(const char *stringPtr);
 void (*DriverReadyIdle)(bool setDefaultChaprone);
 void (*VideoSend)(VideoFrame header, unsigned char *buf, int len);
 void (*HapticsSend)(unsigned long long path, float duration_s, float frequency, float amplitude);
-void (*TimeSyncSend)(TimeSync packet);
 void (*ShutdownRuntime)();
 unsigned long long (*PathStringToHash)(const char *path);
 
@@ -211,19 +210,12 @@ void InputReceive(TrackingInfo data) {
     if (g_driver_provider.hmd && g_driver_provider.hmd->m_Listener) {
         g_driver_provider.hmd->m_Listener->m_Statistics->CountPacket(sizeof(TrackingInfo));
 
-        uint64_t Current = GetTimestampUs();
-        TimeSync sendBuf = {};
-        sendBuf.mode = 3;
-        sendBuf.serverTime = Current - g_driver_provider.hmd->m_Listener->m_TimeDiff;
-        sendBuf.trackingRecvFrameIndex = data.targetTimestampNs;
-        TimeSyncSend(sendBuf);
-
         g_driver_provider.hmd->OnPoseUpdated(data);
     }
 }
-void TimeSyncReceive(TimeSync data) {
+void ReportClientStatistics(ClientStats statistics) {
     if (g_driver_provider.hmd && g_driver_provider.hmd->m_Listener) {
-        g_driver_provider.hmd->m_Listener->ProcessTimeSync(data);
+        g_driver_provider.hmd->m_Listener->ReportStatistics(statistics);
     }
 }
 void VideoErrorReportReceive() {
