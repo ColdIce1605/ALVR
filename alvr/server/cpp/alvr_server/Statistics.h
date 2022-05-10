@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <stdint.h>
 #include <time.h>
+#include <chrono>
 
 #include "Utils.h"
 #include "Settings.h"
+#include "Logger.h"
 
 class Statistics {
 public:
@@ -78,6 +80,11 @@ public:
 		}
 	}
 
+	void NotifyClientFrame() {
+		m_prevClientFrameTime = m_curClientFrameTime;
+		m_curClientFrameTime = std::chrono::system_clock::now();
+	}
+
 	uint64_t GetPacketsSentTotal() {
 		return m_packetsSentTotal;
 	}
@@ -104,6 +111,10 @@ public:
 	}
 	uint64_t GetSendLatencyAverage() {
 		return m_sendLatency;
+	}
+	float GetClientFPS() {
+		auto diff = m_curClientFrameTime - m_prevClientFrameTime;
+		return 1.f / ((double)std::chrono::duration_cast<std::chrono::nanoseconds>(diff).count() / 1e9);
 	}
 
 	bool CheckBitrateUpdated() {
@@ -154,7 +165,6 @@ public:
 	float m_leftControllerBattery;
 	float m_rightControllerBattery;
 
-private:
 	void ResetSecond() {
 		m_packetsSentInSecondPrev = m_packetsSentInSecond;
 		m_bitsSentInSecondPrev = m_bitsSentInSecond;
@@ -188,6 +198,9 @@ private:
 			ResetSecond();
 		}
 	}
+
+	std::chrono::system_clock::time_point m_prevClientFrameTime;
+	std::chrono::system_clock::time_point m_curClientFrameTime;
 
 	uint64_t m_packetsSentTotal;
 	uint64_t m_packetsSentInSecond;

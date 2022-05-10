@@ -435,7 +435,7 @@ pub fn initialize() {
                 if let Some(stats) = stats.summary(timestamp) {
                     sender.send(stats).ok();
                 } else {
-                    warn!("Statistics summary not ready!");
+                    error!("Statistics summary not ready!");
                 }
             }
         }

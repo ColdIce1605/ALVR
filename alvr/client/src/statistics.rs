@@ -17,9 +17,18 @@ pub struct StatisticsManager {
 
 impl StatisticsManager {
     pub fn new(history_size: usize) -> Self {
+        // Add a single initial invalid history frame to avoid division by zero later
         Self {
             max_history_size: history_size,
-            history_buffer: VecDeque::new(),
+            history_buffer: [HistoryFrame {
+                input_acquired: Instant::now(),
+                video_packet_received: Instant::now(),
+                intervals: ClientStatistics {
+                    total_pipeline_latency: Duration::from_millis(1),
+                    ..Default::default()
+                },
+            }]
+            .into(),
         }
     }
 

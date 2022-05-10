@@ -131,9 +131,11 @@ void ClientConnection::SendVideo(uint8_t *buf, int len, uint64_t targetTimestamp
 }
 
 void ClientConnection::ReportStatistics(ClientStats data) {
+	m_Statistics->NotifyClientFrame();
+
 	m_Statistics->CountPacket(sizeof(TrackingInfo));
 
-	m_reportedStatistics.averageTotalLatency = data.totalPipelineLatencyNs / 1000;
+	m_reportedStatistics.serverTotalLatency = data.totalPipelineLatencyNs / 1000;
 	m_reportedStatistics.averageSendLatency = 10'000;
 	m_reportedStatistics.averageTransportLatency = 5'000;
 
@@ -145,18 +147,24 @@ void ClientConnection::ReportStatistics(ClientStats data) {
 	timing[0].m_nSize = sizeof(vr::Compositor_FrameTiming);
 	vr::VRServerDriverHost()->GetFrameTimings(&timing[0], 2);
 
-	m_Statistics->NetworkTotal(m_reportedStatistics.serverTotalLatency);
-	m_Statistics->NetworkSend(m_reportedStatistics.averageTransportLatency);
 
 	float renderTime = timing[0].m_flPreSubmitGpuMs + timing[0].m_flPostSubmitGpuMs + timing[0].m_flTotalRenderGpuMs + timing[0].m_flCompositorRenderGpuMs + timing[0].m_flCompositorRenderCpuMs;
 	float idleTime = timing[0].m_flCompositorIdleCpuMs;
 	float waitTime = timing[0].m_flClientFrameIntervalMs + timing[0].m_flPresentCallCpuMs + timing[0].m_flWaitForPresentCpuMs + timing[0].m_flSubmitFrameMs;
 
-	m_Statistics->Add(m_reportedStatistics.serverTotalLatency / 1000.0, 
+	m_Statistics->NetworkTotal(data.totalPipelineLatencyNs / 1000);
+	m_Statistics->NetworkSend(m_reportedStatistics.averageTransportLatency);
+
+	uint64_t transportLatencyNs = data.totalPipelineLatencyNs - 
+		(renderTime + idleTime) * 1e6 - m_Statistics->GetEncodeLatencyAverage() * 1000
+		- data.videoDecodeNs - data.videoDecodeNs - data.renderingNs - data.vsyncQueueNs;
+	transportLatencyNs = (uint64_t)std::min((double)transportLatencyNs, 0.0);
+
+	m_Statistics->Add(data.totalPipelineLatencyNs / 1e6, 
 		(double)(m_Statistics->GetEncodeLatencyAverage()) / US_TO_MS,
 		m_reportedStatistics.averageTransportLatency / 1000.0,
 		m_reportedStatistics.averageDecodeLatency / 1000.0,
-		m_reportedStatistics.fps,
+		m_Statistics->GetClientFPS(),
 		m_RTT / 2. / 1000.);
 
 	uint64_t now = GetTimestampUs();
@@ -200,7 +208,7 @@ void ClientConnection::ReportStatistics(ClientStats data) {
 			m_fecPercentage,
 			m_reportedStatistics.fecFailureTotal,
 			m_reportedStatistics.fecFailureInSecond,
-			m_Statistics->Get(4),  //clientFPS
+			m_Statistics->GetClientFPS(),
 			m_Statistics->GetFPS(),
 			(int)(m_Statistics->m_hmdBattery * 100),
 			(int)(m_Statistics->m_leftControllerBattery * 100),
@@ -213,16 +221,16 @@ void ClientConnection::ReportStatistics(ClientStats data) {
 	// Continously send statistics info for updating graphs
 	Info("#{ \"id\": \"GraphStatistics\", \"data\": [%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f] }#\n",
 		Current / 1000,                                                //time
-		m_reportedStatistics.serverTotalLatency / 1000.0,              //totalLatency
-		m_reportedStatistics.averageSendLatency / 1000.0,              //receiveLatency
+		data.totalPipelineLatencyNs / 1e6,                             //totalLatency
+		0.0,                                                           //receiveLatency
 		renderTime,                                                    //renderTime
 		idleTime,                                                      //idleTime
 		waitTime,                                                      //waitTime
 		(double)(m_Statistics->GetEncodeLatencyAverage()) / US_TO_MS,  //encodeLatency
-		m_reportedStatistics.averageTransportLatency / 1000.0,         //sendLatency
-		m_reportedStatistics.averageDecodeLatency / 1000.0,            //decodeLatency
-		m_reportedStatistics.idleTime / 1000.0,                        //clientIdleTime
-		m_reportedStatistics.fps,                                      //clientFPS
+		transportLatencyNs / 1e6,                                      //sendLatency
+		data.videoDecodeNs / 1e6,                                      //decodeLatency
+		data.vsyncQueueNs / 1e6,                                       //clientIdleTime
+		m_Statistics->GetClientFPS(),                                  //clientFPS
 		m_Statistics->GetFPS());                                       //serverFPS
 }
 
