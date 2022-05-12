@@ -754,7 +754,7 @@ void updateHapticsState() {
         }
     }
 }
-
+/*
 void renderNative(long long targetTimespampNs) {
     g_ctx.ovrFrameIndex++;
 
@@ -798,7 +798,7 @@ void renderNative(long long targetTimespampNs) {
     frameDesc.Layers = layers2;
 
     vrapi_SubmitFrame2(g_ctx.Ovr, &frameDesc);
-}
+}*/
 
 void updateLoadingTexuture(const unsigned char *data) {
     std::lock_guard<std::mutex> lock(g_ctx.loadingTextureMutex);

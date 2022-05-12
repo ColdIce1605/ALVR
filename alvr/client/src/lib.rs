@@ -110,7 +110,7 @@ pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_destroyNati
 ) {
     destroyNative(env.get_native_interface() as _)
 }
-
+/*
 #[no_mangle]
 pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderNative(
     _: JNIEnv,
@@ -134,7 +134,7 @@ pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderNativ
         }
         renderNative(rendered_frame_index);
     }
-}
+}*/
 
 #[no_mangle]
 pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderLoadingNative(
