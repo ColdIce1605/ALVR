@@ -110,7 +110,7 @@ extern "C" void decoderOutput(long long frameIndex);
 
 extern "C" OnCreateResult onCreate(void *env, void *activity, void *assetManager);
 extern "C" void destroyNative(void *env);
-//extern "C" void renderNative(long long renderedFrameIndex);
+extern "C" void renderNative(long long renderedFrameIndex);
 extern "C" void updateLoadingTexuture(const unsigned char *data);
 extern "C" void renderLoadingNative();
 extern "C" void onTrackingNative(bool clientsidePrediction);

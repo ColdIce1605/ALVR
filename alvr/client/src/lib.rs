@@ -110,7 +110,7 @@ pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_destroyNati
 ) {
     destroyNative(env.get_native_interface() as _)
 }
-/*
+
 #[no_mangle]
 pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderNative(
     _: JNIEnv,
@@ -132,9 +132,9 @@ pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderNativ
         if let Some(stats) = &mut *STATISTICS_MANAGER.lock() {
             stats.report_frame_decoded(Duration::from_nanos(rendered_frame_index as _));
         }
-        renderNative(rendered_frame_index);
+        //renderNative(rendered_frame_index);
     }
-}*/
+}
 
 #[no_mangle]
 pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_renderLoadingNative(
