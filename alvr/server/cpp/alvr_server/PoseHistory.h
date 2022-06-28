@@ -10,16 +10,15 @@ class PoseHistory
 {
 public:
 	struct TrackingHistoryFrame {
-		uint64_t targetTimestampNs;
-		AlvrDeviceMotion motion;
+		TrackingInfo info;
 		vr::HmdMatrix34_t rotationMatrix;
 	};
 
-	void OnPoseUpdated(uint64_t targetTimestampNs, AlvrDeviceMotion motion);
+	void OnPoseUpdated(const TrackingInfo &info);
 
 	std::optional<TrackingHistoryFrame> GetBestPoseMatch(const vr::HmdMatrix34_t &pose) const;
 	// Return the most recent pose known at the given timestamp
-	std::optional<TrackingHistoryFrame> GetPoseAt(uint64_t timestampNs) const;
+	std::optional<TrackingHistoryFrame> GetPoseAt(uint64_t client_timestamp_us) const;
 
 private:
 	mutable std::mutex m_mutex;

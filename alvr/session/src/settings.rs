@@ -281,7 +281,7 @@ pub enum OpenvrPropValue {
     String(String),
 }
 
-#[derive(SettingsSchema, Serialize, Deserialize, Clone)]
+#[derive(SettingsSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllersDesc {
     // Dropdown:
@@ -325,8 +325,16 @@ pub struct ControllersDesc {
     #[schema(advanced)]
     pub input_profile_path: String,
 
-    #[schema(advanced, min = 0.0, max = 1.0, step = 0.01)]
-    pub prediction_multiplier: f32,
+    #[schema(placeholder = "tracking_speed")]
+    //
+    #[schema(advanced)]
+    pub pose_time_offset: f32,
+
+    #[schema(advanced)]
+    pub clientside_prediction: bool,
+
+    #[schema(advanced)]
+    pub serverside_prediction: bool,
 
     #[schema(advanced, min = 0., max = 0.1, step = 0.001)]
     pub linear_velocity_cutoff: f32,
@@ -340,7 +348,7 @@ pub struct ControllersDesc {
     #[schema(advanced)]
     pub rotation_offset_left: [f32; 3],
 
-    #[schema(min = 0., max = 5., step = 0.1)]
+    #[schema(advanced, min = 0., max = 5., step = 0.1)]
     pub haptics_intensity: f32,
 
     #[schema(advanced, min = 0., max = 1., step = 0.01)]
@@ -507,7 +515,6 @@ pub struct ExtraDesc {
     pub update_channel: UpdateChannel,
     pub log_to_disk: bool,
 
-    pub log_button_presses: bool,
     #[schema(advanced)]
     pub notification_level: LogLevel,
     #[schema(advanced)]
@@ -694,7 +701,9 @@ pub fn session_settings_default() -> SettingsDefault {
                     ctrl_type_right: "oculus_touch".into(),
                     registered_device_type: "oculus/1WMGH000XX0000_Controller".into(),
                     input_profile_path: "{oculus}/input/touch_profile.json".into(),
-                    prediction_multiplier: 1.0,
+                    pose_time_offset: 0.01,
+                    clientside_prediction: false,
+                    serverside_prediction: true,
                     linear_velocity_cutoff: 0.01,
                     angular_velocity_cutoff: 10.,
                     position_offset_left: [-0.0065, 0.002, -0.051],
@@ -752,7 +761,6 @@ pub fn session_settings_default() -> SettingsDefault {
                 },
             },
             log_to_disk: cfg!(debug_assertions),
-            log_button_presses: false,
             notification_level: LogLevelDefault {
                 variant: if cfg!(debug_assertions) {
                     LogLevelDefaultVariant::Info

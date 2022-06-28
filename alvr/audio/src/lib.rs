@@ -179,17 +179,21 @@ fn get_windows_device(device: &AudioDevice) -> StrResult<IMMDevice> {
     use windows::Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
         Media::Audio::{eAll, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE},
-        System::Com::{self, StructuredStorage::STGM_READ, CLSCTX_ALL, COINIT_MULTITHREADED},
+        System::Com::{
+            CoCreateInstance, CoInitializeEx,
+            StructuredStorage::{PropVariantClear, STGM_READ},
+            CLSCTX_ALL, COINIT_MULTITHREADED,
+        },
     };
 
     let device_name = device.inner.name().map_err(err!())?;
 
     unsafe {
         // This will fail the second time is called, ignore it
-        Com::CoInitializeEx(ptr::null_mut(), COINIT_MULTITHREADED).ok();
+        CoInitializeEx(ptr::null_mut(), COINIT_MULTITHREADED).ok();
 
         let imm_device_enumerator: IMMDeviceEnumerator =
-            Com::CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(err!())?;
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(err!())?;
 
         let imm_device_collection = imm_device_enumerator
             .EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE)
@@ -207,7 +211,7 @@ fn get_windows_device(device: &AudioDevice) -> StrResult<IMMDevice> {
                 .map_err(err!())?;
             let utf16_name =
                 U16CStr::from_ptr_str(prop_variant.Anonymous.Anonymous.Anonymous.pwszVal.0);
-            Com::StructuredStorage::PropVariantClear(&mut prop_variant).map_err(err!())?;
+            PropVariantClear(&mut prop_variant).map_err(err!())?;
 
             let imm_device_name = utf16_name.to_string().map_err(err!())?;
             if imm_device_name == device_name {
@@ -222,7 +226,7 @@ fn get_windows_device(device: &AudioDevice) -> StrResult<IMMDevice> {
 #[cfg(windows)]
 pub fn get_windows_device_id(device: &AudioDevice) -> StrResult<String> {
     use widestring::U16CStr;
-    use windows::Win32::System::Com;
+    use windows::Win32::System::Com::CoTaskMemFree;
 
     unsafe {
         let imm_device = get_windows_device(device)?;
@@ -231,7 +235,7 @@ pub fn get_windows_device_id(device: &AudioDevice) -> StrResult<String> {
         let id_str = U16CStr::from_ptr_str(id_str_ptr.0)
             .to_string()
             .map_err(err!())?;
-        Com::CoTaskMemFree(id_str_ptr.0 as _);
+        CoTaskMemFree(id_str_ptr.0 as _);
 
         Ok(id_str)
     }
@@ -240,15 +244,28 @@ pub fn get_windows_device_id(device: &AudioDevice) -> StrResult<String> {
 // device must be an output device
 #[cfg(windows)]
 fn set_mute_windows_device(device: &AudioDevice, mute: bool) -> StrResult {
-    use std::ptr;
-    use windows::Win32::{Media::Audio::Endpoints::IAudioEndpointVolume, System::Com::CLSCTX_ALL};
+    use std::{
+        mem,
+        ptr::{self, NonNull},
+    };
+    use windows::{
+        core::Interface,
+        Win32::{Media::Audio::Endpoints::IAudioEndpointVolume, System::Com::CLSCTX_ALL},
+    };
 
     unsafe {
         let imm_device = get_windows_device(device)?;
 
-        let endpoint_volume = imm_device
-            .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, ptr::null_mut())
+        let mut res_ptr = ptr::null_mut();
+        imm_device
+            .Activate(
+                &IAudioEndpointVolume::IID,
+                CLSCTX_ALL,
+                ptr::null_mut(),
+                &mut res_ptr,
+            )
             .map_err(err!())?;
+        let endpoint_volume: IAudioEndpointVolume = mem::transmute(NonNull::new(res_ptr).unwrap());
 
         endpoint_volume
             .SetMute(mute, ptr::null_mut())

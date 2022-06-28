@@ -38,11 +38,13 @@ class OvrHmd : public TrackedDevice,
     virtual void DebugRequest(const char *request, char *response_buffer, uint32_t size) {}
     virtual vr::DriverPose_t GetPose();
 
-    void OnPoseUpdated(uint64_t targetTimestampNs, AlvrDeviceMotion motion);
+    void OnPoseUpdated(TrackingInfo info);
 
     void StartStreaming();
 
     void OnStreamStart();
+
+    void updateController(const TrackingInfo &info);
 
     void SetViewsConfig(ViewsConfigData config);
 
@@ -62,6 +64,7 @@ class OvrHmd : public TrackedDevice,
     virtual vr::DistortionCoordinates_t ComputeDistortion(vr::EVREye eEye, float fU, float fV);
 
     std::shared_ptr<ClientConnection> m_Listener;
+    float m_poseTimeOffset;
 
     vr::VRInputComponentHandle_t m_proximity;
 
@@ -69,6 +72,8 @@ class OvrHmd : public TrackedDevice,
     std::shared_ptr<OvrController> m_rightController;
 
     std::shared_ptr<CEncoder> m_encoder;
+
+    TrackingInfo m_TrackingInfo;
   private:
     ViewsConfigData views_config;
 
@@ -94,6 +99,4 @@ class OvrHmd : public TrackedDevice,
     std::shared_ptr<PoseHistory> m_poseHistory;
 
     std::shared_ptr<OvrViveTrackerProxy> m_viveTrackerProxy;
-
-    vr::DriverPose_t m_pose = {};
 };

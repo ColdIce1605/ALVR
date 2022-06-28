@@ -17,20 +17,24 @@ use alvr_common::{
     once_cell::sync::{Lazy, OnceCell},
     parking_lot::Mutex,
     prelude::*,
-    ALVR_VERSION,
+    ALVR_VERSION, HEAD_ID, LEFT_HAND_ID, RIGHT_HAND_ID,
 };
-use alvr_events::ButtonValue;
 use alvr_session::{AudioDeviceId, Fov};
 use alvr_sockets::{
-    BatteryPacket, ClientControlPacket, ClientStatistics, DeviceMotion, HeadsetInfoPacket,
-    Tracking, ViewsConfig,
+    BatteryPacket, ClientControlPacket, ClientStatistics, HeadsetInfoPacket, Input,
+    LegacyController, LegacyInput, MotionData, ViewsConfig,
 };
-use jni::objects::{GlobalRef, ReleaseMode};
+use jni::{
+    objects::{GlobalRef, JObject, ReleaseMode},
+    sys::{jboolean, jobject},
+    JNIEnv, JavaVM,
+};
 use statistics::StatisticsManager;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     ffi::{c_void, CStr},
-    os::raw::c_char,
+    intrinsics::copy_nonoverlapping,
+    os::raw::{c_char, c_uchar},
     ptr, slice,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -39,12 +43,13 @@ use tokio::{runtime::Runtime, sync::mpsc, sync::Notify};
 
 // This is the actual storage for the context pointer set in ndk-context. usually stored in
 // ndk-glue instead
+static GLOBAL_CONTEXT: OnceCell<GlobalRef> = OnceCell::new();
 static GLOBAL_ASSET_MANAGER: OnceCell<GlobalRef> = OnceCell::new();
 
 static STATISTICS_MANAGER: Lazy<Mutex<Option<StatisticsManager>>> = Lazy::new(|| Mutex::new(None));
 
 static RUNTIME: Lazy<Mutex<Option<Runtime>>> = Lazy::new(|| Mutex::new(None));
-static TRACKING_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<Tracking>>>> =
+static INPUT_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<Input>>>> =
     Lazy::new(|| Mutex::new(None));
 static STATISTICS_SENDER: Lazy<Mutex<Option<mpsc::UnboundedSender<ClientStatistics>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -69,6 +74,13 @@ pub enum AlvrEvent {
 }
 
 #[repr(C)]
+pub struct AlvrEyeInput {
+    orientation: TrackingQuat,
+    position: [f32; 3],
+    fov: EyeFov,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EyeFov {
     left: f32,
@@ -78,8 +90,8 @@ pub struct EyeFov {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct AlvrQuat {
+#[derive(Clone, Copy)]
+pub struct TrackingQuat {
     x: f32,
     y: f32,
     z: f32,
@@ -87,32 +99,46 @@ pub struct AlvrQuat {
 }
 
 #[repr(C)]
-#[derive(Clone, Default)]
-pub struct AlvrDeviceMotion {
-    device_id: u64,
-    orientation: AlvrQuat,
-    position: [f32; 3],
-    linear_velocity: [f32; 3],
-    angular_velocity: [f32; 3],
+#[derive(Clone, Copy)]
+pub struct TrackingVector3 {
+    x: f32,
+    y: f32,
+    z: f32,
 }
 
+#[allow(non_snake_case)]
 #[repr(C)]
-pub struct AlvrEyeInput {
-    orientation: AlvrQuat,
-    position: [f32; 3],
-    fov: EyeFov,
-}
-
-#[repr(C)]
-pub struct OculusHand {
+pub struct TrackingController {
     enabled: bool,
-    bone_rotations: [AlvrQuat; 19],
+    isHand: bool,
+    buttons: u64,
+
+    trackpadPosition: [f32; 2],
+    triggerValue: f32,
+    gripValue: f32,
+
+    orientation: TrackingQuat,
+    position: TrackingVector3,
+    angularVelocity: TrackingVector3,
+    linearVelocity: TrackingVector3,
+
+    boneRotations: [TrackingQuat; 19],
+    bonePositionsBase: [TrackingVector3; 19],
+    boneRootOrientation: TrackingQuat,
+    boneRootPosition: TrackingVector3,
+    handFingerConfidences: u32,
 }
 
+#[allow(non_snake_case)]
 #[repr(C)]
-pub enum AlvrButtonValue {
-    Binary(bool),
-    Scalar(f32),
+pub struct TrackingInfo {
+    targetTimestampNs: u64,
+    HeadPose_Pose_Orientation: TrackingQuat,
+    HeadPose_Pose_Position: TrackingVector3,
+
+    mounted: u8,
+
+    controller: [TrackingController; 2],
 }
 
 #[no_mangle]
@@ -223,10 +249,7 @@ pub extern "C" fn alvr_initialize(java_vm: *mut c_void, context: *mut c_void) {
     };
     *STREAM_TEAXTURE_HANDLE.lock() = result.streamSurfaceHandle;
 
-    GLOBAL_ASSET_MANAGER
-        .set(asset_manager)
-        .map_err(|_| ())
-        .unwrap();
+    GLOBAL_ASSET_MANAGER.set(asset_manager);
 }
 
 #[no_mangle]
@@ -457,78 +480,152 @@ pub unsafe extern "C" fn alvr_is_streaming() -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn alvr_send_button(path_id: u64, value: AlvrButtonValue) {
-    if let Some(sender) = &*CONTROL_CHANNEL_SENDER.lock() {
-        sender
-            .send(ClientControlPacket::Button {
-                path_id,
-                value: match value {
-                    AlvrButtonValue::Binary(value) => ButtonValue::Binary(value),
-                    AlvrButtonValue::Scalar(value) => ButtonValue::Scalar(value),
-                },
-            })
-            .ok();
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn alvr_send_tracking(
-    target_timestamp_ns: u64,
-    device_motions: *const AlvrDeviceMotion,
-    device_motions_count: u64,
-    left_oculus_hand: OculusHand,
-    right_oculus_hand: OculusHand,
-) {
-    fn from_tracking_quat(quat: AlvrQuat) -> Quat {
+pub extern "C" fn alvr_send_input(data: TrackingInfo) {
+    fn from_tracking_quat(quat: TrackingQuat) -> Quat {
         Quat::from_xyzw(quat.x, quat.y, quat.z, quat.w)
     }
 
-    fn from_oculus_hand(hand: OculusHand) -> Option<[Quat; 19]> {
-        hand.enabled.then(|| {
-            let vec = hand
-                .bone_rotations
-                .iter()
-                .cloned()
-                .map(from_tracking_quat)
-                .collect::<Vec<_>>();
-
-            let mut array = [Quat::IDENTITY; 19];
-            array.copy_from_slice(&vec);
-
-            array
-        })
+    fn from_tracking_vector3(vec: TrackingVector3) -> Vec3 {
+        Vec3::new(vec.x, vec.y, vec.z)
     }
 
-    if let Some(sender) = &*TRACKING_SENDER.lock() {
-        let mut raw_motions = vec![AlvrDeviceMotion::default(); device_motions_count as _];
-        unsafe {
-            ptr::copy_nonoverlapping(
-                device_motions,
-                raw_motions.as_mut_ptr(),
-                device_motions_count as _,
-            )
-        };
-
-        let device_motions = raw_motions
-            .into_iter()
-            .map(|motion| {
+    if let Some(sender) = &*INPUT_SENDER.lock() {
+        let input = Input {
+            target_timestamp: Duration::from_nanos(data.targetTimestampNs),
+            device_motions: vec![
                 (
-                    motion.device_id,
-                    DeviceMotion {
-                        orientation: from_tracking_quat(motion.orientation),
-                        position: Vec3::from_slice(&motion.position),
-                        linear_velocity: Vec3::from_slice(&motion.linear_velocity),
-                        angular_velocity: Vec3::from_slice(&motion.angular_velocity),
+                    *HEAD_ID,
+                    MotionData {
+                        orientation: from_tracking_quat(data.HeadPose_Pose_Orientation),
+                        position: from_tracking_vector3(data.HeadPose_Pose_Position),
+                        linear_velocity: Vec3::ZERO,
+                        angular_velocity: Vec3::ZERO,
                     },
-                )
-            })
-            .collect::<Vec<_>>();
+                ),
+                (
+                    *LEFT_HAND_ID,
+                    MotionData {
+                        orientation: from_tracking_quat(if data.controller[0].isHand {
+                            data.controller[0].boneRootOrientation
+                        } else {
+                            data.controller[0].orientation
+                        }),
+                        position: from_tracking_vector3(if data.controller[0].isHand {
+                            data.controller[0].boneRootPosition
+                        } else {
+                            data.controller[0].position
+                        }),
+                        linear_velocity: from_tracking_vector3(data.controller[0].linearVelocity),
+                        angular_velocity: from_tracking_vector3(data.controller[0].angularVelocity),
+                    },
+                ),
+                (
+                    *RIGHT_HAND_ID,
+                    MotionData {
+                        orientation: from_tracking_quat(if data.controller[1].isHand {
+                            data.controller[1].boneRootOrientation
+                        } else {
+                            data.controller[1].orientation
+                        }),
+                        position: from_tracking_vector3(if data.controller[1].isHand {
+                            data.controller[1].boneRootPosition
+                        } else {
+                            data.controller[1].position
+                        }),
+                        linear_velocity: from_tracking_vector3(data.controller[1].linearVelocity),
+                        angular_velocity: from_tracking_vector3(data.controller[1].angularVelocity),
+                    },
+                ),
+            ],
+            left_hand_tracking: None,
+            right_hand_tracking: None,
+            button_values: HashMap::new(), // unused for now
+            legacy: LegacyInput {
+                mounted: data.mounted,
+                controllers: [
+                    LegacyController {
+                        enabled: data.controller[0].enabled,
+                        is_hand: data.controller[0].isHand,
+                        buttons: data.controller[0].buttons,
+                        trackpad_position: Vec2::new(
+                            data.controller[0].trackpadPosition[0],
+                            data.controller[0].trackpadPosition[1],
+                        ),
+                        trigger_value: data.controller[0].triggerValue,
+                        grip_value: data.controller[0].gripValue,
+                        bone_rotations: {
+                            let vec = data.controller[0]
+                                .boneRotations
+                                .iter()
+                                .cloned()
+                                .map(from_tracking_quat)
+                                .collect::<Vec<_>>();
 
-        let input = Tracking {
-            target_timestamp: Duration::from_nanos(target_timestamp_ns),
-            device_motions,
-            left_hand_skeleton: from_oculus_hand(left_oculus_hand),
-            right_hand_skeleton: from_oculus_hand(right_oculus_hand),
+                            let mut array = [Quat::IDENTITY; 19];
+                            array.copy_from_slice(&vec);
+
+                            array
+                        },
+                        bone_positions_base: {
+                            let vec = data.controller[0]
+                                .bonePositionsBase
+                                .iter()
+                                .cloned()
+                                .map(from_tracking_vector3)
+                                .collect::<Vec<_>>();
+
+                            let mut array = [Vec3::ZERO; 19];
+                            array.copy_from_slice(&vec);
+
+                            array
+                        },
+                        hand_finger_confience: data.controller[0].handFingerConfidences,
+                    },
+                    LegacyController {
+                        enabled: data.controller[1].enabled,
+                        is_hand: data.controller[1].isHand,
+                        buttons: data.controller[1].buttons,
+                        trackpad_position: Vec2::new(
+                            data.controller[1].trackpadPosition[0],
+                            data.controller[1].trackpadPosition[1],
+                        ),
+
+                        trigger_value: data.controller[1].triggerValue,
+
+                        grip_value: data.controller[1].gripValue,
+
+                        bone_rotations: {
+                            let vec = data.controller[1]
+                                .boneRotations
+                                .iter()
+                                .cloned()
+                                .map(from_tracking_quat)
+                                .collect::<Vec<_>>();
+
+                            let mut array = [Quat::IDENTITY; 19];
+                            array.copy_from_slice(&vec);
+
+                            array
+                        },
+
+                        bone_positions_base: {
+                            let vec = data.controller[1]
+                                .bonePositionsBase
+                                .iter()
+                                .cloned()
+                                .map(from_tracking_vector3)
+                                .collect::<Vec<_>>();
+
+                            let mut array = [Vec3::ZERO; 19];
+                            array.copy_from_slice(&vec);
+
+                            array
+                        },
+
+                        hand_finger_confience: data.controller[1].handFingerConfidences,
+                    },
+                ],
+            },
         };
 
         sender.send(input).ok();
